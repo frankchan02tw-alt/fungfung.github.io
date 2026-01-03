@@ -7,8 +7,8 @@
     <style>
         :root {
             --bg-color: #f0f9ff;
-            --grass-color: #4ade80;
-            --dirt-color: #8b4513;
+            --grass-color: #22c55e;
+            --dirt-color: #713f12;
             --ball-color: #ffffff;
             --ui-text: #1e293b;
         }
@@ -35,7 +35,7 @@
         canvas {
             display: block;
             cursor: crosshair;
-            background: linear-gradient(to bottom, #7dd3fc 0%, #f0f9ff 100%);
+            background: linear-gradient(to bottom, #bae6fd 0%, #f0f9ff 100%);
         }
 
         #ui-layer {
@@ -47,7 +47,7 @@
             display: flex;
             justify-content: space-between;
             color: var(--ui-text);
-            font-size: 24px;
+            font-size: 20px;
             font-weight: bold;
         }
 
@@ -56,32 +56,49 @@
             top: 50%;
             left: 50%;
             transform: translate(-50%, -50%);
-            background: rgba(255, 255, 255, 0.9);
-            padding: 20px 40px;
-            border-radius: 15px;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            background: rgba(255, 255, 255, 0.95);
+            padding: 25px 45px;
+            border-radius: 20px;
+            box-shadow: 0 15px 35px rgba(0,0,0,0.1);
             text-align: center;
-            transition: opacity 0.3s;
+            transition: opacity 0.5s;
+            z-index: 10;
         }
 
         .score-board {
-            background: rgba(255, 255, 255, 0.8);
-            padding: 10px 20px;
-            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 12px 24px;
+            border-radius: 12px;
             box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            border: 2px solid #e2e8f0;
         }
 
         .message-box {
             position: absolute;
-            bottom: 50px;
+            bottom: 60px;
             left: 50%;
             transform: translateX(-50%);
             background: #1e293b;
             color: white;
-            padding: 15px 30px;
-            border-radius: 30px;
-            font-size: 18px;
+            padding: 15px 35px;
+            border-radius: 50px;
+            font-size: 20px;
             display: none;
+            z-index: 100;
+        }
+
+        #reload-btn {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            pointer-events: auto;
+            background: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: bold;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
     </style>
 </head>
@@ -89,14 +106,17 @@
 
 <div id="game-container">
     <div id="ui-layer">
-        <div class="score-board">分數：<span id="score">100</span></div>
-        <div class="score-board">試咗幾多次：<span id="attempts">0</span></div>
+        <div class="score-board">得分：<span id="score">100</span></div>
+        <div class="score-board">揮杆次數：<span id="attempts">0</span></div>
+        <button id="reload-btn" onclick="location.reload()">重新生成地圖</button>
     </div>
 
     <div id="instruction" class="instruction-overlay">
-        <h2>點樣玩？</h2>
-        <p>撳住個波向左拖，拉得愈遠愈大力！</p>
-        <p>睇住條拋物線黎瞄準，放手就揮杆！</p>
+        <h2 style="margin-top:0">點樣玩？⛳️</h2>
+        <p>1. 撳住個波向左拖，拉得愈遠愈大力</p>
+        <p>2. 睇住條拋物線黎瞄準</p>
+        <p>3. <b>放手</b> 就會揮杆！</p>
+        <p style="color:#64748b; font-size: 0.9em; margin-bottom: 0;">(依家個力細咗，要精準啲呀)</p>
     </div>
 
     <div id="message" class="message-box"></div>
@@ -113,11 +133,13 @@
     const messageEl = document.getElementById('message');
 
     // 遊戲常數
-    const GRAVITY = 0.25;
-    const FRICTION = 0.98;
-    const BOUNCE = 0.5;
-    const BALL_RADIUS = 8;
-    const HOLE_WIDTH = 30;
+    const GRAVITY = 0.22;
+    const FRICTION = 0.975;
+    const BOUNCE = 0.4;
+    const BALL_RADIUS = 7;
+    const HOLE_WIDTH = 34;
+    const HOLE_DEPTH = 12;
+    const POWER_MULTIPLIER = 0.08; // 調低揮杆力度
 
     // 遊戲狀態
     let gameState = {
@@ -126,21 +148,15 @@
         isDragging: false,
         dragStart: { x: 0, y: 0 },
         dragEnd: { x: 0, y: 0 },
-        ball: {
-            x: 100,
-            y: 0,
-            vx: 0,
-            vy: 0,
-            isMoving: false
-        },
+        ball: { x: 100, y: 0, vx: 0, vy: 0, isMoving: false },
         terrain: [],
-        hole: { x: 0, y: 0 },
+        holeX: 0,
         win: false
     };
 
     function init() {
         resize();
-        generateTerrain();
+        generateWorld();
         resetBall();
         animate();
     }
@@ -148,101 +164,115 @@
     function resize() {
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
-        if (gameState.terrain.length > 0) generateTerrain(); 
     }
 
-    function generateTerrain() {
-        const points = [];
-        const segments = 50;
+    // 使用隨機中點位移算法生成更隨機的地形
+    function generateWorld() {
         const width = canvas.width;
         const height = canvas.height;
-        const baseHeight = height * 0.7;
+        const segments = 128; // 增加細節
+        const points = new Array(segments + 1);
         
-        for (let i = 0; i <= segments; i++) {
-            const x = (width / segments) * i;
-            // 隨機起伏，但保證起點同終點平坦啲
-            let randomness = Math.sin(i * 0.3) * 40 + Math.random() * 20;
-            if (i < 5 || i > segments - 10) randomness *= 0.2;
-            
-            points.push({ x, y: baseHeight + randomness });
-        }
-        gameState.terrain = points;
+        // 初始兩端
+        points[0] = height * 0.7;
+        points[segments] = height * 0.75;
 
-        // 設定洞嘅位置喺右邊 85% 左右
-        const holeIndex = Math.floor(segments * 0.85);
-        gameState.hole = {
-            x: points[holeIndex].x,
-            y: points[holeIndex].y
-        };
+        // 中點位移遞迴
+        function displace(start, end, magnitude) {
+            if (end - start <= 1) return;
+            const mid = Math.floor((start + end) / 2);
+            const delta = (Math.random() - 0.5) * magnitude;
+            points[mid] = (points[start] + points[end]) / 2 + delta;
+            displace(start, mid, magnitude * 0.55);
+            displace(mid, end, magnitude * 0.55);
+        }
+
+        displace(0, segments, 250);
+
+        // 轉換為座標並平滑處理起點
+        gameState.terrain = [];
+        const step = width / segments;
+        for (let i = 0; i <= segments; i++) {
+            let y = points[i];
+            // 保證左側起始點較平坦
+            if (i < 15) {
+                const ratio = i / 15;
+                y = (height * 0.7) * (1 - ratio) + y * ratio;
+            }
+            gameState.terrain.push({ x: i * step, y: y });
+        }
+
+        // 隨機選一個洞的位置 (在右側 70%-90% 區間)
+        const holeIdx = Math.floor(segments * (0.7 + Math.random() * 0.2));
+        gameState.holeX = gameState.terrain[holeIdx].x;
+
+        // 修改地形，使球洞向內凹
+        const holeInfluenceRadius = 4; // 影響多少個點
+        for (let i = -holeInfluenceRadius; i <= holeInfluenceRadius; i++) {
+            const idx = holeIdx + i;
+            if (idx >= 0 && idx < gameState.terrain.length) {
+                // 創造一個半圓形凹槽
+                const dist = Math.abs(i) / holeInfluenceRadius;
+                const depth = Math.sqrt(1 - dist * dist) * HOLE_DEPTH;
+                gameState.terrain[idx].y += depth;
+            }
+        }
+    }
+
+    function getTerrainHeight(x) {
+        if (x < 0) return gameState.terrain[0].y;
+        if (x >= canvas.width) return gameState.terrain[gameState.terrain.length - 1].y;
+        
+        const step = canvas.width / (gameState.terrain.length - 1);
+        const i = Math.floor(x / step);
+        const p1 = gameState.terrain[i];
+        const p2 = gameState.terrain[i + 1];
+        const t = (x - p1.x) / (p2.x - p1.x);
+        return p1.y + (p2.y - p1.y) * t;
     }
 
     function resetBall() {
-        // 搵翻起點嘅高度
-        gameState.ball.x = 100;
-        gameState.ball.y = getTerrainHeight(100) - BALL_RADIUS;
+        gameState.ball.x = 80;
+        gameState.ball.y = getTerrainHeight(80) - BALL_RADIUS;
         gameState.ball.vx = 0;
         gameState.ball.vy = 0;
         gameState.ball.isMoving = false;
         gameState.win = false;
     }
 
-    function getTerrainHeight(x) {
-        for (let i = 0; i < gameState.terrain.length - 1; i++) {
-            const p1 = gameState.terrain[i];
-            const p2 = gameState.terrain[i+1];
-            if (x >= p1.x && x <= p2.x) {
-                const t = (x - p1.x) / (p2.x - p1.x);
-                return p1.y + (p2.y - p1.y) * t;
-            }
-        }
-        return canvas.height;
-    }
-
     function showMessage(text) {
         messageEl.textContent = text;
         messageEl.style.display = 'block';
-        setTimeout(() => {
-            messageEl.style.display = 'none';
-        }, 2000);
+        setTimeout(() => messageEl.style.display = 'none', 3000);
     }
 
     // 事件監聽
     canvas.addEventListener('mousedown', (e) => {
         if (gameState.ball.isMoving || gameState.win) return;
         
-        const rect = canvas.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
-
-        // 檢查係咪點中球附近（或者直接當作全螢幕揮杆）
         gameState.isDragging = true;
         gameState.dragStart = { x: gameState.ball.x, y: gameState.ball.y };
-        gameState.dragEnd = { x: mouseX, y: mouseY };
+        gameState.dragEnd = { x: e.clientX, y: e.clientY };
         
         instructionEl.style.opacity = '0';
-        setTimeout(() => instructionEl.style.display = 'none', 300);
+        setTimeout(() => instructionEl.style.display = 'none', 500);
     });
 
     window.addEventListener('mousemove', (e) => {
-        if (!gameState.isDragging) return;
-        const rect = canvas.getBoundingClientRect();
-        gameState.dragEnd = { 
-            x: e.clientX - rect.left, 
-            y: e.clientY - rect.top 
-        };
+        if (gameState.isDragging) {
+            gameState.dragEnd = { x: e.clientX, y: e.clientY };
+        }
     });
 
     window.addEventListener('mouseup', () => {
         if (!gameState.isDragging) return;
         
         gameState.isDragging = false;
-        
-        // 計算力度與角度
         const dx = gameState.dragStart.x - gameState.dragEnd.x;
         const dy = gameState.dragStart.y - gameState.dragEnd.y;
         
-        gameState.ball.vx = dx * 0.15;
-        gameState.ball.vy = dy * 0.15;
+        gameState.ball.vx = dx * POWER_MULTIPLIER;
+        gameState.ball.vy = dy * POWER_MULTIPLIER;
         gameState.ball.isMoving = true;
         
         gameState.attempts++;
@@ -257,20 +287,33 @@
     function update() {
         if (!gameState.ball.isMoving) return;
 
-        // 物理模擬
         gameState.ball.vy += GRAVITY;
         gameState.ball.x += gameState.ball.vx;
         gameState.ball.y += gameState.ball.vy;
 
-        const currentTerrainY = getTerrainHeight(gameState.ball.x);
+        const groundY = getTerrainHeight(gameState.ball.x);
 
-        // 碰撞檢測
-        if (gameState.ball.y + BALL_RADIUS >= currentTerrainY) {
-            // 撞到地面
-            gameState.ball.y = currentTerrainY - BALL_RADIUS;
+        // 碰撞與入球檢測
+        if (gameState.ball.y + BALL_RADIUS >= groundY) {
+            gameState.ball.y = groundY - BALL_RADIUS;
             
-            // 簡單的反彈與摩擦
-            if (Math.abs(gameState.ball.vy) > 1) {
+            // 判斷是否在洞的核心區域且速度夠慢
+            const distToHole = Math.abs(gameState.ball.x - gameState.holeX);
+            if (distToHole < HOLE_WIDTH / 3 && Math.abs(gameState.ball.vx) < 3 && Math.abs(gameState.ball.vy) < 2) {
+                gameState.ball.vx *= 0.5;
+                // 滾到洞底中心
+                gameState.ball.x += (gameState.holeX - gameState.ball.x) * 0.1;
+                
+                if (Math.abs(gameState.ball.vx) < 0.1) {
+                    gameState.ball.isMoving = false;
+                    gameState.win = true;
+                    showMessage("一桿入洞！犀利呀！得咗！");
+                    return;
+                }
+            }
+
+            // 反彈
+            if (Math.abs(gameState.ball.vy) > 0.5) {
                 gameState.ball.vy *= -BOUNCE;
             } else {
                 gameState.ball.vy = 0;
@@ -279,33 +322,34 @@
             gameState.ball.vx *= FRICTION;
 
             // 停低判斷
-            if (Math.abs(gameState.ball.vx) < 0.2 && Math.abs(gameState.ball.vy) < 0.2) {
+            if (Math.abs(gameState.ball.vx) < 0.15 && Math.abs(gameState.ball.vy) < 0.15) {
                 gameState.ball.vx = 0;
                 gameState.ball.vy = 0;
                 gameState.ball.isMoving = false;
-                
-                // 檢查係咪入咗洞
-                const distToHole = Math.abs(gameState.ball.x - gameState.hole.x);
-                if (distToHole < HOLE_WIDTH / 2) {
-                    gameState.win = true;
-                    showMessage("入咗喇！好波！");
-                    setTimeout(() => {
-                        if(confirm(`贏咗！得分：${gameState.score}。再玩一場？`)) {
-                            location.reload();
-                        }
-                    }, 500);
-                } else if (gameState.ball.x > canvas.width || gameState.ball.x < 0) {
-                    showMessage("出咗界呀！");
-                    resetBall();
-                }
             }
+        }
+
+        // 邊界檢查
+        if (gameState.ball.x < 0 || gameState.ball.x > canvas.width) {
+            showMessage("喂！出咗界喇！");
+            resetBall();
         }
     }
 
     function draw() {
         ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-        // 畫地形
+        // 1. 畫背景裝飾 (遠山)
+        ctx.fillStyle = '#e2e8f0';
+        ctx.beginPath();
+        ctx.moveTo(0, canvas.height);
+        ctx.lineTo(0, canvas.height * 0.8);
+        ctx.quadraticCurveTo(canvas.width * 0.25, canvas.height * 0.6, canvas.width * 0.5, canvas.height * 0.8);
+        ctx.quadraticCurveTo(canvas.width * 0.75, canvas.height * 0.7, canvas.width, canvas.height * 0.9);
+        ctx.lineTo(canvas.width, canvas.height);
+        ctx.fill();
+
+        // 2. 畫地形
         ctx.beginPath();
         ctx.moveTo(0, canvas.height);
         for (const p of gameState.terrain) {
@@ -314,87 +358,86 @@
         ctx.lineTo(canvas.width, canvas.height);
         ctx.fillStyle = varColor('--grass-color');
         ctx.fill();
-        
-        // 地底顏色
+
+        // 泥土層
         ctx.beginPath();
         ctx.moveTo(0, canvas.height);
         for (const p of gameState.terrain) {
             ctx.lineTo(p.x, p.y + 10);
         }
         ctx.lineTo(canvas.width, canvas.height);
-        ctx.fillStyle = 'rgba(0,0,0,0.1)';
+        ctx.fillStyle = varColor('--dirt-color');
         ctx.fill();
 
-        // 畫洞
-        ctx.fillStyle = '#1e293b';
-        ctx.beginPath();
-        ctx.arc(gameState.hole.x, gameState.hole.y + 2, HOLE_WIDTH/2, 0, Math.PI, false);
-        ctx.fill();
-        
-        // 旗杆
-        ctx.strokeStyle = '#f87171';
+        // 3. 畫球洞旗杆
+        const holeY = getTerrainHeight(gameState.holeX);
+        ctx.strokeStyle = '#64748b';
         ctx.lineWidth = 3;
         ctx.beginPath();
-        ctx.moveTo(gameState.hole.x, gameState.hole.y);
-        ctx.lineTo(gameState.hole.x, gameState.hole.y - 60);
+        ctx.moveTo(gameState.holeX, holeY);
+        ctx.lineTo(gameState.holeX, holeY - 70);
         ctx.stroke();
-        // 旗幟
+        // 旗仔
         ctx.fillStyle = '#ef4444';
         ctx.beginPath();
-        ctx.moveTo(gameState.hole.x, gameState.hole.y - 60);
-        ctx.lineTo(gameState.hole.x + 20, gameState.hole.y - 50);
-        ctx.lineTo(gameState.hole.x, gameState.hole.y - 40);
+        ctx.moveTo(gameState.holeX, holeY - 70);
+        ctx.lineTo(gameState.holeX + 25, holeY - 58);
+        ctx.lineTo(gameState.holeX, holeY - 46);
         ctx.fill();
 
-        // 畫高爾夫球手 (簡單剪影)
+        // 4. 畫球手
         if (!gameState.ball.isMoving && !gameState.win) {
+            const px = gameState.ball.x - 20;
+            const py = gameState.ball.y + BALL_RADIUS;
             ctx.fillStyle = '#334155';
-            const playerX = gameState.ball.x - 20;
-            const playerY = gameState.ball.y;
-            // 身體
-            ctx.fillRect(playerX - 5, playerY - 40, 10, 40);
-            // 頭
+            ctx.fillRect(px - 4, py - 45, 8, 45); // 身體
             ctx.beginPath();
-            ctx.arc(playerX, playerY - 45, 6, 0, Math.PI * 2);
+            ctx.arc(px, py - 50, 7, 0, Math.PI * 2); // 頭
             ctx.fill();
         }
 
-        // 畫球
-        ctx.shadowBlur = 5;
-        ctx.shadowColor = 'rgba(0,0,0,0.2)';
+        // 5. 畫球
         ctx.fillStyle = varColor('--ball-color');
+        ctx.shadowBlur = 4;
+        ctx.shadowColor = 'rgba(0,0,0,0.3)';
         ctx.beginPath();
         ctx.arc(gameState.ball.x, gameState.ball.y, BALL_RADIUS, 0, Math.PI * 2);
         ctx.fill();
         ctx.shadowBlur = 0;
 
-        // 畫拋物線提示
+        // 6. 畫拋物線提示
         if (gameState.isDragging) {
             drawTrajectory();
         }
     }
 
     function drawTrajectory() {
-        const dx = gameState.dragStart.x - gameState.dragEnd.x;
-        const dy = gameState.dragStart.y - gameState.dragEnd.y;
+        const dx = (gameState.dragStart.x - gameState.dragEnd.x);
+        const dy = (gameState.dragStart.y - gameState.dragEnd.y);
+        const power = Math.sqrt(dx*dx + dy*dy);
+        
         let tx = gameState.ball.x;
         let ty = gameState.ball.y;
-        let tvx = dx * 0.15;
-        let tvy = dy * 0.15;
+        let tvx = dx * POWER_MULTIPLIER;
+        let tvy = dy * POWER_MULTIPLIER;
+
+        // 限制顯示的長度跟隨力度，力度愈大顯示愈長
+        const maxSteps = Math.min(100, 20 + power * 0.2); 
 
         ctx.beginPath();
-        ctx.setLineDash([5, 5]);
+        ctx.setLineDash([4, 4]);
         ctx.moveTo(tx, ty);
 
-        for (let i = 0; i < 60; i++) {
+        for (let i = 0; i < maxSteps; i++) {
             tvy += GRAVITY;
             tx += tvx;
             ty += tvy;
             
-            const alpha = 1 - (i / 60);
-            ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.6})`;
-            ctx.lineTo(tx, ty);
+            // 距離愈遠愈淡
+            const alpha = Math.max(0, 0.8 * (1 - i / maxSteps));
+            ctx.strokeStyle = `rgba(255, 255, 255, ${alpha})`;
             
+            ctx.lineTo(tx, ty);
             if (ty > getTerrainHeight(tx)) break;
         }
         ctx.stroke();
@@ -411,9 +454,13 @@
         requestAnimationFrame(animate);
     }
 
-    window.addEventListener('resize', resize);
-    init();
+    window.addEventListener('resize', () => {
+        resize();
+        generateWorld();
+        resetBall();
+    });
 
+    init();
 </script>
 
 </body>
