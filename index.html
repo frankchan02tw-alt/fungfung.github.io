@@ -1,11 +1,420 @@
 <!DOCTYPE html>
 <html lang="zh-HK">
 <head>
-<meta charset="UTF-8">
-<title>我的 GitHub Pages 網站</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>極簡高爾夫 - 隨機挑戰</title>
+    <style>
+        :root {
+            --bg-color: #f0f9ff;
+            --grass-color: #4ade80;
+            --dirt-color: #8b4513;
+            --ball-color: #ffffff;
+            --ui-text: #1e293b;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            font-family: "Microsoft JhengHei", "Heiti TC", sans-serif;
+            background-color: var(--bg-color);
+        }
+
+        #game-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        canvas {
+            display: block;
+            cursor: crosshair;
+            background: linear-gradient(to bottom, #7dd3fc 0%, #f0f9ff 100%);
+        }
+
+        #ui-layer {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            right: 20px;
+            pointer-events: none;
+            display: flex;
+            justify-content: space-between;
+            color: var(--ui-text);
+            font-size: 24px;
+            font-weight: bold;
+        }
+
+        .instruction-overlay {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(255, 255, 255, 0.9);
+            padding: 20px 40px;
+            border-radius: 15px;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+            text-align: center;
+            transition: opacity 0.3s;
+        }
+
+        .score-board {
+            background: rgba(255, 255, 255, 0.8);
+            padding: 10px 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        }
+
+        .message-box {
+            position: absolute;
+            bottom: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1e293b;
+            color: white;
+            padding: 15px 30px;
+            border-radius: 30px;
+            font-size: 18px;
+            display: none;
+        }
+    </style>
 </head>
 <body>
-<h1>你好！GitHub Pages 已經成功運作 🎉</h1>
-<p>呢度係我嘅第一個 GitHub Pages 頁面。</p>
+
+<div id="game-container">
+    <div id="ui-layer">
+        <div class="score-board">分數：<span id="score">100</span></div>
+        <div class="score-board">試咗幾多次：<span id="attempts">0</span></div>
+    </div>
+
+    <div id="instruction" class="instruction-overlay">
+        <h2>點樣玩？</h2>
+        <p>撳住個波向左拖，拉得愈遠愈大力！</p>
+        <p>睇住條拋物線黎瞄準，放手就揮杆！</p>
+    </div>
+
+    <div id="message" class="message-box"></div>
+
+    <canvas id="gameCanvas"></canvas>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreEl = document.getElementById('score');
+    const attemptsEl = document.getElementById('attempts');
+    const instructionEl = document.getElementById('instruction');
+    const messageEl = document.getElementById('message');
+
+    // 遊戲常數
+    const GRAVITY = 0.25;
+    const FRICTION = 0.98;
+    const BOUNCE = 0.5;
+    const BALL_RADIUS = 8;
+    const HOLE_WIDTH = 30;
+
+    // 遊戲狀態
+    let gameState = {
+        score: 100,
+        attempts: 0,
+        isDragging: false,
+        dragStart: { x: 0, y: 0 },
+        dragEnd: { x: 0, y: 0 },
+        ball: {
+            x: 100,
+            y: 0,
+            vx: 0,
+            vy: 0,
+            isMoving: false
+        },
+        terrain: [],
+        hole: { x: 0, y: 0 },
+        win: false
+    };
+
+    function init() {
+        resize();
+        generateTerrain();
+        resetBall();
+        animate();
+    }
+
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        if (gameState.terrain.length > 0) generateTerrain(); 
+    }
+
+    function generateTerrain() {
+        const points = [];
+        const segments = 50;
+        const width = canvas.width;
+        const height = canvas.height;
+        const baseHeight = height * 0.7;
+        
+        for (let i = 0; i <= segments; i++) {
+            const x = (width / segments) * i;
+            // 隨機起伏，但保證起點同終點平坦啲
+            let randomness = Math.sin(i * 0.3) * 40 + Math.random() * 20;
+            if (i < 5 || i > segments - 10) randomness *= 0.2;
+            
+            points.push({ x, y: baseHeight + randomness });
+        }
+        gameState.terrain = points;
+
+        // 設定洞嘅位置喺右邊 85% 左右
+        const holeIndex = Math.floor(segments * 0.85);
+        gameState.hole = {
+            x: points[holeIndex].x,
+            y: points[holeIndex].y
+        };
+    }
+
+    function resetBall() {
+        // 搵翻起點嘅高度
+        gameState.ball.x = 100;
+        gameState.ball.y = getTerrainHeight(100) - BALL_RADIUS;
+        gameState.ball.vx = 0;
+        gameState.ball.vy = 0;
+        gameState.ball.isMoving = false;
+        gameState.win = false;
+    }
+
+    function getTerrainHeight(x) {
+        for (let i = 0; i < gameState.terrain.length - 1; i++) {
+            const p1 = gameState.terrain[i];
+            const p2 = gameState.terrain[i+1];
+            if (x >= p1.x && x <= p2.x) {
+                const t = (x - p1.x) / (p2.x - p1.x);
+                return p1.y + (p2.y - p1.y) * t;
+            }
+        }
+        return canvas.height;
+    }
+
+    function showMessage(text) {
+        messageEl.textContent = text;
+        messageEl.style.display = 'block';
+        setTimeout(() => {
+            messageEl.style.display = 'none';
+        }, 2000);
+    }
+
+    // 事件監聽
+    canvas.addEventListener('mousedown', (e) => {
+        if (gameState.ball.isMoving || gameState.win) return;
+        
+        const rect = canvas.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+
+        // 檢查係咪點中球附近（或者直接當作全螢幕揮杆）
+        gameState.isDragging = true;
+        gameState.dragStart = { x: gameState.ball.x, y: gameState.ball.y };
+        gameState.dragEnd = { x: mouseX, y: mouseY };
+        
+        instructionEl.style.opacity = '0';
+        setTimeout(() => instructionEl.style.display = 'none', 300);
+    });
+
+    window.addEventListener('mousemove', (e) => {
+        if (!gameState.isDragging) return;
+        const rect = canvas.getBoundingClientRect();
+        gameState.dragEnd = { 
+            x: e.clientX - rect.left, 
+            y: e.clientY - rect.top 
+        };
+    });
+
+    window.addEventListener('mouseup', () => {
+        if (!gameState.isDragging) return;
+        
+        gameState.isDragging = false;
+        
+        // 計算力度與角度
+        const dx = gameState.dragStart.x - gameState.dragEnd.x;
+        const dy = gameState.dragStart.y - gameState.dragEnd.y;
+        
+        gameState.ball.vx = dx * 0.15;
+        gameState.ball.vy = dy * 0.15;
+        gameState.ball.isMoving = true;
+        
+        gameState.attempts++;
+        attemptsEl.textContent = gameState.attempts;
+        
+        if (gameState.attempts > 1) {
+            gameState.score = Math.max(0, gameState.score - 1);
+            scoreEl.textContent = gameState.score;
+        }
+    });
+
+    function update() {
+        if (!gameState.ball.isMoving) return;
+
+        // 物理模擬
+        gameState.ball.vy += GRAVITY;
+        gameState.ball.x += gameState.ball.vx;
+        gameState.ball.y += gameState.ball.vy;
+
+        const currentTerrainY = getTerrainHeight(gameState.ball.x);
+
+        // 碰撞檢測
+        if (gameState.ball.y + BALL_RADIUS >= currentTerrainY) {
+            // 撞到地面
+            gameState.ball.y = currentTerrainY - BALL_RADIUS;
+            
+            // 簡單的反彈與摩擦
+            if (Math.abs(gameState.ball.vy) > 1) {
+                gameState.ball.vy *= -BOUNCE;
+            } else {
+                gameState.ball.vy = 0;
+            }
+            
+            gameState.ball.vx *= FRICTION;
+
+            // 停低判斷
+            if (Math.abs(gameState.ball.vx) < 0.2 && Math.abs(gameState.ball.vy) < 0.2) {
+                gameState.ball.vx = 0;
+                gameState.ball.vy = 0;
+                gameState.ball.isMoving = false;
+                
+                // 檢查係咪入咗洞
+                const distToHole = Math.abs(gameState.ball.x - gameState.hole.x);
+                if (distToHole < HOLE_WIDTH / 2) {
+                    gameState.win = true;
+                    showMessage("入咗喇！好波！");
+                    setTimeout(() => {
+                        if(confirm(`贏咗！得分：${gameState.score}。再玩一場？`)) {
+                            location.reload();
+                        }
+                    }, 500);
+                } else if (gameState.ball.x > canvas.width || gameState.ball.x < 0) {
+                    showMessage("出咗界呀！");
+                    resetBall();
+                }
+            }
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // 畫地形
+        ctx.beginPath();
+        ctx.moveTo(0, canvas.height);
+        for (const p of gameState.terrain) {
+            ctx.lineTo(p.x, p.y);
+        }
+        ctx.lineTo(canvas.width, canvas.height);
+        ctx.fillStyle = varColor('--grass-color');
+        ctx.fill();
+        
+        // 地底顏色
+        ctx.beginPath();
+        ctx.moveTo(0, canvas.height);
+        for (const p of gameState.terrain) {
+            ctx.lineTo(p.x, p.y + 10);
+        }
+        ctx.lineTo(canvas.width, canvas.height);
+        ctx.fillStyle = 'rgba(0,0,0,0.1)';
+        ctx.fill();
+
+        // 畫洞
+        ctx.fillStyle = '#1e293b';
+        ctx.beginPath();
+        ctx.arc(gameState.hole.x, gameState.hole.y + 2, HOLE_WIDTH/2, 0, Math.PI, false);
+        ctx.fill();
+        
+        // 旗杆
+        ctx.strokeStyle = '#f87171';
+        ctx.lineWidth = 3;
+        ctx.beginPath();
+        ctx.moveTo(gameState.hole.x, gameState.hole.y);
+        ctx.lineTo(gameState.hole.x, gameState.hole.y - 60);
+        ctx.stroke();
+        // 旗幟
+        ctx.fillStyle = '#ef4444';
+        ctx.beginPath();
+        ctx.moveTo(gameState.hole.x, gameState.hole.y - 60);
+        ctx.lineTo(gameState.hole.x + 20, gameState.hole.y - 50);
+        ctx.lineTo(gameState.hole.x, gameState.hole.y - 40);
+        ctx.fill();
+
+        // 畫高爾夫球手 (簡單剪影)
+        if (!gameState.ball.isMoving && !gameState.win) {
+            ctx.fillStyle = '#334155';
+            const playerX = gameState.ball.x - 20;
+            const playerY = gameState.ball.y;
+            // 身體
+            ctx.fillRect(playerX - 5, playerY - 40, 10, 40);
+            // 頭
+            ctx.beginPath();
+            ctx.arc(playerX, playerY - 45, 6, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // 畫球
+        ctx.shadowBlur = 5;
+        ctx.shadowColor = 'rgba(0,0,0,0.2)';
+        ctx.fillStyle = varColor('--ball-color');
+        ctx.beginPath();
+        ctx.arc(gameState.ball.x, gameState.ball.y, BALL_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // 畫拋物線提示
+        if (gameState.isDragging) {
+            drawTrajectory();
+        }
+    }
+
+    function drawTrajectory() {
+        const dx = gameState.dragStart.x - gameState.dragEnd.x;
+        const dy = gameState.dragStart.y - gameState.dragEnd.y;
+        let tx = gameState.ball.x;
+        let ty = gameState.ball.y;
+        let tvx = dx * 0.15;
+        let tvy = dy * 0.15;
+
+        ctx.beginPath();
+        ctx.setLineDash([5, 5]);
+        ctx.moveTo(tx, ty);
+
+        for (let i = 0; i < 60; i++) {
+            tvy += GRAVITY;
+            tx += tvx;
+            ty += tvy;
+            
+            const alpha = 1 - (i / 60);
+            ctx.strokeStyle = `rgba(255, 255, 255, ${alpha * 0.6})`;
+            ctx.lineTo(tx, ty);
+            
+            if (ty > getTerrainHeight(tx)) break;
+        }
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    function varColor(name) {
+        return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    }
+
+    function animate() {
+        update();
+        draw();
+        requestAnimationFrame(animate);
+    }
+
+    window.addEventListener('resize', resize);
+    init();
+
+</script>
+
 </body>
 </html>
